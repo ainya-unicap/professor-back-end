@@ -8,9 +8,9 @@ Feito com Django e Django REST Framework, com autenticação por token JWT.
 
 ```
 config/       configurações do projeto e rotas principais
-accounts/     usuários, login e cadastro
-turmas/       turmas, convites e prazos (em construção)
-relatorios/   relatórios dos alunos e correção (em construção)
+accounts/     usuários, login, cadastro e permissões
+turmas/       turmas, matrículas, código de convite e painel do professor
+relatorios/   relatórios dos alunos e status de correção
 ```
 
 ## Como funciona
@@ -26,7 +26,13 @@ Depois do login ou do cadastro, a API devolve dois tokens:
 - `access`: enviado em todas as chamadas protegidas, no cabeçalho `Authorization: Bearer <token>`.
 - `refresh`: usado para gerar um novo `access` quando ele expira.
 
-Toda rota exige o token, exceto login, cadastro e renovação de token.
+Toda rota exige o token, exceto login, cadastro e renovação de token. As rotas da área do professor também exigem que o usuário tenha papel `professor`; um aluno recebe `403`.
+
+### Modelos
+
+- **Turma**: pertence a um professor e tem nome, período (`2026.1`, `2026.2`...), instituição, prazos e um **código de convite** de 6 caracteres gerado automaticamente. Um professor não pode ter duas turmas com o mesmo nome no mesmo período.
+- **Matrícula**: liga um aluno a uma turma.
+- **Relatório**: de um aluno em uma turma, com a planta acompanhada e o status `rascunho`, `entregue` (aguardando correção) ou `corrigido`.
 
 ## Endpoints
 
@@ -35,6 +41,9 @@ Toda rota exige o token, exceto login, cadastro e renovação de token.
 | `POST` | `/api/auth/login/` | Valida e-mail e senha e devolve os tokens e os dados do usuário |
 | `POST` | `/api/auth/cadastro/` | Cria uma conta de professor e já devolve os tokens e os dados do usuário |
 | `POST` | `/api/auth/token/refresh/` | Gera um novo `access` a partir do `refresh` |
+| `GET` | `/api/turmas/` | Lista as turmas do professor logado |
+| `POST` | `/api/turmas/` | Cria uma turma para o professor logado |
+| `GET` | `/api/professor/painel/` | Resumo do painel do professor |
 
 ### Login
 
@@ -83,6 +92,67 @@ Regras do cadastro:
 - A senha passa pelos validadores padrão do Django: tamanho mínimo, senhas comuns, senha só com números e senha parecida com os dados do usuário.
 - A conta é criada sempre com o papel `professor`.
 
+### Turmas
+
+Criação:
+
+```json
+{ "nome": "Turma A", "periodo": "2026.1", "instituicao": "UNICAP" }
+```
+
+Resposta `201`:
+
+```json
+{
+  "id": 1,
+  "nome": "Turma A",
+  "periodo": "2026.1",
+  "instituicao": "UNICAP",
+  "codigo_convite": "K7MPQ3",
+  "ativa": true,
+  "alunos": 0,
+  "relatorios_entregues": 0,
+  "inicio_registros": null,
+  "encerramento_registros": null,
+  "limite_entrega": null,
+  "prazo_correcao": null,
+  "aceitar_atrasadas": false
+}
+```
+
+Erros de validação voltam com `400`, por exemplo `{"nome": ["Você já tem uma turma com esse nome neste período."]}`. A listagem devolve só as turmas do professor logado, no mesmo formato.
+
+### Painel
+
+Junta numa resposta tudo o que a tela inicial do professor precisa, considerando só as turmas ativas:
+
+```json
+{
+  "periodo_atual": "2026.1",
+  "instituicao": "UNICAP",
+  "resumo": {
+    "aguardando_correcao": 7,
+    "turmas_com_pendencia": 2,
+    "turmas_ativas": 2,
+    "alunos": 34,
+    "prazo_avaliacao": "2026-06-20"
+  },
+  "turmas": [ "... até 3 turmas, no formato da listagem ..." ],
+  "aguardando": [
+    { "id": 10, "aluno": "Pedro Sá", "planta": "Camelo", "turma": "Turma A", "entregue_em": "..." }
+  ]
+}
+```
+
+- `aguardando_correcao`: relatórios com status `entregue`.
+- `alunos`: alunos distintos matriculados nas turmas ativas.
+- `prazo_avaliacao`: o próximo prazo de correção que ainda não passou, ou `null`.
+- `aguardando`: os 4 relatórios entregues há mais tempo.
+
+### Tokens
+
+O `access` vale 30 minutos e o `refresh` vale 8 horas.
+
 ## Rodando localmente
 
 ```bash
@@ -96,7 +166,7 @@ python manage.py runserver 8000
 
 Preencha o `.env` a partir do `.env.example`. O `.env` não vai para o git.
 
-Para acessar o admin (`/admin/`), crie um superusuário com `python manage.py createsuperuser`.
+Para acessar o admin (`/admin/`), crie um superusuário com `python manage.py createsuperuser`. Pelo admin dá para cadastrar turmas, matrículas e relatórios de teste para ver o painel com dados.
 
 ## Testes
 
