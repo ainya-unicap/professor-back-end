@@ -32,7 +32,10 @@ Toda rota exige o token, exceto login, cadastro e renovação de token. As rotas
 
 - **Turma**: pertence a um professor e tem nome, período (`2026.1`, `2026.2`...), instituição, prazos e um **código de convite** de 6 caracteres gerado automaticamente. Um professor não pode ter duas turmas com o mesmo nome no mesmo período.
 - **Matrícula**: liga um aluno a uma turma.
-- **Relatório**: de um aluno em uma turma, com a planta acompanhada e o status `rascunho`, `entregue` (aguardando correção) ou `corrigido`.
+- **Relatório**: de um aluno em uma turma, com a planta acompanhada, as seções (introdução, objetivo, desenvolvimento, conclusão e referências), o PDF gerado pelo aluno, a nota, o feedback e o status `rascunho`, `entregue` (aguardando correção) ou `corrigido`. Relatórios em rascunho não aparecem para o professor.
+- **Foto do relatório**: imagens do canteiro anexadas ao desenvolvimento, com legenda e ordem.
+
+Os arquivos (PDF e fotos) não ficam públicos: só são entregues pelas rotas da API, para o professor da turma.
 
 ## Endpoints
 
@@ -43,7 +46,16 @@ Toda rota exige o token, exceto login, cadastro e renovação de token. As rotas
 | `POST` | `/api/auth/token/refresh/` | Gera um novo `access` a partir do `refresh` |
 | `GET` | `/api/turmas/` | Lista as turmas do professor logado |
 | `POST` | `/api/turmas/` | Cria uma turma para o professor logado |
+| `GET` | `/api/turmas/<id>/` | Detalhe da turma, com link de convite e lista de alunos |
+| `GET` | `/api/turmas/<id>/relatorios/` | Relatórios entregues da turma (aguardando correção primeiro) |
+| `PATCH` | `/api/turmas/<id>/prazos/` | Atualiza os prazos da turma |
+| `POST` | `/api/turmas/<id>/novo-codigo/` | Gera um novo código de convite (o anterior deixa de valer) |
 | `GET` | `/api/professor/painel/` | Resumo do painel do professor |
+| `GET` | `/api/professor/pendentes/` | Quantos relatórios aguardam correção (usado no menu) |
+| `GET` | `/api/relatorios/<id>/` | Relatório completo, com o anterior e o próximo da turma |
+| `PATCH` | `/api/relatorios/<id>/avaliacao/` | Salva nota e feedback; com `concluir` marca como corrigido |
+| `GET` | `/api/relatorios/<id>/pdf/` | Download do PDF do relatório |
+| `GET` | `/api/relatorios/<id>/fotos/<foto_id>/` | Imagem de uma foto do relatório |
 
 ### Login
 
@@ -112,6 +124,7 @@ Resposta `201`:
   "ativa": true,
   "alunos": 0,
   "relatorios_entregues": 0,
+  "aguardando_correcao": 0,
   "inicio_registros": null,
   "encerramento_registros": null,
   "limite_entrega": null,
@@ -121,6 +134,48 @@ Resposta `201`:
 ```
 
 Erros de validação voltam com `400`, por exemplo `{"nome": ["Você já tem uma turma com esse nome neste período."]}`. A listagem devolve só as turmas do professor logado, no mesmo formato.
+
+### Detalhe da turma
+
+Além dos campos da listagem, devolve `link_convite` (montado a partir da configuração `CONVITE_URL_BASE` do `.env`, que deve apontar para a página do app do aluno que recebe o código) e `alunos_lista`:
+
+```json
+[
+  { "id": 11, "nome": "Pedro Sá", "status": "entregue", "relatorio_id": 101 },
+  { "id": 13, "nome": "Bruno Lima", "status": "corrigido", "relatorio_id": 103 },
+  { "id": 14, "nome": "Carla Reis", "status": "sem_relatorio", "relatorio_id": null }
+]
+```
+
+A lista vem ordenada: primeiro quem aguarda correção, depois os corrigidos e por fim quem ainda não entregou.
+
+### Prazos
+
+```json
+{
+  "inicio_registros": "2026-03-02",
+  "encerramento_registros": "2026-06-05",
+  "limite_entrega": "2026-06-12",
+  "prazo_correcao": "2026-06-26",
+  "aceitar_atrasadas": false
+}
+```
+
+Todos são opcionais e podem ser `null`. As datas preenchidas precisam seguir a ordem acima; se uma vier antes da anterior, a resposta é `400` com o erro no campo.
+
+### Relatório e avaliação
+
+O detalhe traz o aluno, a turma (com o prazo de correção), as seções, as fotos (`id` e `legenda`), `tem_pdf`, a nota, o feedback e os ids do relatório `anterior` e `proximo` da mesma turma, na ordem de entrega.
+
+Avaliação:
+
+```json
+{ "nota": "8.5", "feedback": "Ótimo acompanhamento.", "concluir": true }
+```
+
+- A nota vai de 0 a 10, com até duas casas decimais.
+- Sem `concluir`, nota e feedback são salvos e o relatório continua aguardando correção.
+- Com `concluir`, a nota passa a ser obrigatória e o relatório é marcado como corrigido.
 
 ### Painel
 

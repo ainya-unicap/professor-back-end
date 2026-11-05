@@ -1,4 +1,5 @@
 from django.db.models import Max, Min
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
@@ -10,7 +11,12 @@ from relatorios.models import Relatorio
 
 from .consultas import turmas_do_professor
 from .models import Matricula
-from .serializers import RelatorioPendenteSerializer, TurmaSerializer
+from .serializers import (
+    PrazosSerializer,
+    RelatorioPendenteSerializer,
+    TurmaDetalheSerializer,
+    TurmaSerializer,
+)
 
 LIMITE_TURMAS_PAINEL = 3
 LIMITE_PENDENTES_PAINEL = 4
@@ -26,6 +32,46 @@ class TurmaListaView(generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         serializer.save(professor=self.request.user)
+
+
+class TurmaDetalheView(generics.RetrieveAPIView):
+    serializer_class = TurmaDetalheSerializer
+    permission_classes = [IsAuthenticated, EhProfessor]
+
+    def get_queryset(self):
+        return turmas_do_professor(self.request.user).prefetch_related("relatorios")
+
+
+class TurmaPrazosView(APIView):
+    permission_classes = [IsAuthenticated, EhProfessor]
+
+    def patch(self, request, pk):
+        turma = get_object_or_404(turmas_do_professor(request.user), pk=pk)
+        serializer = PrazosSerializer(turma, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(PrazosSerializer(turma).data)
+
+
+class TurmaNovoCodigoView(APIView):
+    permission_classes = [IsAuthenticated, EhProfessor]
+
+    def post(self, request, pk):
+        turma = get_object_or_404(turmas_do_professor(request.user), pk=pk)
+        turma.gerar_novo_codigo()
+        return Response({"codigo_convite": turma.codigo_convite, "link_convite": turma.link_convite})
+
+
+class PendentesView(APIView):
+    permission_classes = [IsAuthenticated, EhProfessor]
+
+    def get(self, request):
+        total = Relatorio.objects.filter(
+            turma__professor=request.user,
+            turma__ativa=True,
+            status=Relatorio.Status.ENTREGUE,
+        ).count()
+        return Response({"aguardando_correcao": total})
 
 
 class PainelView(APIView):

@@ -78,6 +78,8 @@ REST_FRAMEWORK = {
     ),
 }
 
+CONVITE_URL_BASE = os.getenv("CONVITE_URL_BASE", "http://localhost:3000/convite")
+
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
     "REFRESH_TOKEN_LIFETIME": timedelta(hours=8),

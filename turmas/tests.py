@@ -156,6 +156,7 @@ class PainelTests(APITestCase):
         turma = next(t for t in dados["turmas"] if t["nome"] == "Turma A")
         self.assertEqual(turma["alunos"], 3)
         self.assertEqual(turma["relatorios_entregues"], 2)
+        self.assertEqual(turma["aguardando_correcao"], 1)
 
         self.assertEqual(
             [(r["aluno"], r["planta"], r["turma"]) for r in dados["aguardando"]],
@@ -176,3 +177,110 @@ class PainelTests(APITestCase):
     def test_aluno_nao_acessa(self):
         self.client.force_authenticate(criar_usuario("aluno@teste.com", papel="aluno"))
         self.assertEqual(self.client.get(self.url).status_code, 403)
+
+
+class TurmaDetalheTests(APITestCase):
+    def setUp(self):
+        self.professor = criar_usuario("prof@teste.com")
+        self.client.force_authenticate(self.professor)
+        self.turma = Turma.objects.create(
+            professor=self.professor, nome="Turma A", periodo="2026.1", instituicao="UNICAP"
+        )
+        self.url = reverse("turma", args=[self.turma.pk])
+
+    def test_detalhe_com_convite_e_alunos(self):
+        ana = criar_usuario("ana@t.com", papel="aluno", nome="Ana", sobrenome="Souza")
+        bruno = criar_usuario("bruno@t.com", papel="aluno", nome="Bruno", sobrenome="Lima")
+        carla = criar_usuario("carla@t.com", papel="aluno", nome="Carla", sobrenome="Reis")
+        davi = criar_usuario("davi@t.com", papel="aluno", nome="Davi", sobrenome="Melo")
+        for aluno in (ana, bruno, carla, davi):
+            Matricula.objects.create(turma=self.turma, aluno=aluno)
+        Relatorio.objects.create(turma=self.turma, aluno=bruno, planta="Aruana", status="corrigido")
+        entregue = Relatorio.objects.create(turma=self.turma, aluno=carla, planta="Camelo", status="entregue")
+        Relatorio.objects.create(turma=self.turma, aluno=davi, planta="Camelo", status="rascunho")
+
+        with self.settings(CONVITE_URL_BASE="https://alunos.exemplo/convite/"):
+            resposta = self.client.get(self.url)
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(
+            resposta.data["link_convite"],
+            f"https://alunos.exemplo/convite/{self.turma.codigo_convite}",
+        )
+        self.assertEqual(resposta.data["alunos"], 4)
+        self.assertEqual(
+            [(a["nome"], a["status"], a["relatorio_id"]) for a in resposta.data["alunos_lista"]],
+            [
+                ("Carla Reis", "entregue", entregue.id),
+                ("Bruno Lima", "corrigido", Relatorio.objects.get(aluno=bruno).id),
+                ("Ana Souza", "sem_relatorio", None),
+                ("Davi Melo", "sem_relatorio", None),
+            ],
+        )
+
+    def test_turma_de_outro_professor_retorna_404(self):
+        outra = Turma.objects.create(
+            professor=criar_usuario("outro@t.com"), nome="Turma X", periodo="2026.1", instituicao="UNICAP"
+        )
+        self.assertEqual(self.client.get(reverse("turma", args=[outra.pk])).status_code, 404)
+        self.assertEqual(self.client.patch(reverse("turma_prazos", args=[outra.pk]), {}).status_code, 404)
+        self.assertEqual(self.client.post(reverse("turma_novo_codigo", args=[outra.pk])).status_code, 404)
+
+    def test_salva_prazos(self):
+        resposta = self.client.patch(
+            reverse("turma_prazos", args=[self.turma.pk]),
+            {
+                "inicio_registros": "2026-03-02",
+                "encerramento_registros": "2026-06-05",
+                "limite_entrega": "2026-06-12",
+                "prazo_correcao": "2026-06-26",
+                "aceitar_atrasadas": True,
+            },
+            format="json",
+        )
+        self.assertEqual(resposta.status_code, 200)
+        self.turma.refresh_from_db()
+        self.assertEqual(str(self.turma.prazo_correcao), "2026-06-26")
+        self.assertTrue(self.turma.aceitar_atrasadas)
+
+    def test_prazos_fora_de_ordem(self):
+        resposta = self.client.patch(
+            reverse("turma_prazos", args=[self.turma.pk]),
+            {"inicio_registros": "2026-06-10", "encerramento_registros": "2026-06-05"},
+            format="json",
+        )
+        self.assertEqual(resposta.status_code, 400)
+        self.assertIn("encerramento_registros", resposta.data)
+
+    def test_prazos_podem_ficar_vazios(self):
+        resposta = self.client.patch(
+            reverse("turma_prazos", args=[self.turma.pk]),
+            {"inicio_registros": None, "prazo_correcao": "2026-06-26"},
+            format="json",
+        )
+        self.assertEqual(resposta.status_code, 200)
+
+    def test_gera_novo_codigo(self):
+        antigo = self.turma.codigo_convite
+        resposta = self.client.post(reverse("turma_novo_codigo", args=[self.turma.pk]))
+        self.assertEqual(resposta.status_code, 200)
+        self.turma.refresh_from_db()
+        self.assertNotEqual(self.turma.codigo_convite, antigo)
+        self.assertEqual(resposta.data["codigo_convite"], self.turma.codigo_convite)
+        self.assertTrue(resposta.data["link_convite"].endswith(self.turma.codigo_convite))
+
+    def test_aluno_nao_acessa(self):
+        self.client.force_authenticate(criar_usuario("aluno@t.com", papel="aluno"))
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+
+
+class PendentesTests(APITestCase):
+    def test_conta_so_os_entregues_das_turmas_do_professor(self):
+        professor = criar_usuario("prof@teste.com")
+        self.client.force_authenticate(professor)
+        turma = Turma.objects.create(professor=professor, nome="Turma A", periodo="2026.1", instituicao="UNICAP")
+        outra = Turma.objects.create(professor=criar_usuario("o@t.com"), nome="X", periodo="2026.1", instituicao="U")
+        for i, (t, status) in enumerate([(turma, "entregue"), (turma, "entregue"), (turma, "corrigido"), (outra, "entregue")]):
+            aluno = criar_usuario(f"a{i}@t.com", papel="aluno")
+            Relatorio.objects.create(turma=t, aluno=aluno, planta="Camelo", status=status)
+        resposta = self.client.get(reverse("pendentes"))
+        self.assertEqual(resposta.data, {"aguardando_correcao": 2})

@@ -55,6 +55,14 @@ class Turma(models.Model):
             self.codigo_convite = gerar_codigo_convite()
         super().save(*args, **kwargs)
 
+    def gerar_novo_codigo(self):
+        self.codigo_convite = gerar_codigo_convite()
+        self.save(update_fields=["codigo_convite"])
+
+    @property
+    def link_convite(self):
+        return f"{settings.CONVITE_URL_BASE.rstrip('/')}/{self.codigo_convite}"
+
 
 class Matricula(models.Model):
     turma = models.ForeignKey(Turma, on_delete=models.CASCADE, related_name="matriculas")

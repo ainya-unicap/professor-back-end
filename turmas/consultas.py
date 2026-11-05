@@ -15,4 +15,9 @@ def turmas_do_professor(professor):
             filter=Q(relatorios__status__in=STATUS_ENTREGUES),
             distinct=True,
         ),
+        total_pendentes=Count(
+            "relatorios",
+            filter=Q(relatorios__status=Relatorio.Status.ENTREGUE),
+            distinct=True,
+        ),
     )
